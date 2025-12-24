@@ -25,6 +25,8 @@ npm install
 yarn install
 ```
 
+> **💡 نکته:** این پروژه JavaScript خالص است و **نیازی به build ندارد**. مستقیماً با Node.js اجرا می‌شود.
+
 ### 2. تنظیم Environment Variables
 
 فایل `.env.example` را کپی کرده و به `.env` تغییر نام دهید:
@@ -145,59 +147,38 @@ ALLOWED_ORIGINS=https://bankdex.io,https://www.bankdex.io,https://app.bankdex.io
 
 **نکته:** اگر `ALLOWED_ORIGINS` خالی باشد، همه دامنه‌ها مجاز هستند (فقط برای development).
 
-## 🐳 Docker Deployment
+## 🚀 استقرار (Deployment)
 
-### ساخت Docker Image:
+برای راهنمای کامل استقرار روی Linux و Windows Server، فایل **[DEPLOYMENT.md](./DEPLOYMENT.md)** را مطالعه کنید.
 
+### روش‌های استقرار:
+
+- ✅ **Linux**: با PM2 و Nginx (پیشنهادی)
+- ✅ **Windows Server**: با PM2 (ساده و سریع)
+- ✅ **Docker**: برای هر دو پلتفرم
+- ✅ **systemd**: برای Linux (بدون PM2)
+- ✅ **Windows Service**: برای Windows (بدون PM2)
+
+### استقرار سریع:
+
+**Linux:**
 ```bash
-docker build -t orderly-proxy .
+bash deploy.sh
 ```
 
-### اجرای Container:
-
-```bash
-docker run -d \
-  -p 3000:3000 \
-  -e PORT=3000 \
-  -e ALLOWED_ORIGINS=https://bankdex.io \
-  -e NODE_ENV=production \
-  --name orderly-proxy \
-  orderly-proxy
-```
-
-### Docker Compose:
-
-فایل `docker-compose.yml` را ایجاد کنید:
-
-```yaml
-version: '3.8'
-
-services:
-  proxy:
-    build: .
-    ports:
-      - "3000:3000"
-    environment:
-      - PORT=3000
-      - ALLOWED_ORIGINS=https://bankdex.io
-      - NODE_ENV=production
-    restart: unless-stopped
-```
-
-سپس اجرا کنید:
-
-```bash
-docker-compose up -d
+**Windows:**
+```powershell
+.\deploy-windows.ps1
 ```
 
 ## 📝 تنظیم در Frontend
 
-در فایل `public/config.js` پروژه frontend، proxy URL را تنظیم کنید:
+بعد از deploy، در فایل `public/config.js` پروژه frontend، proxy URL را تنظیم کنید:
 
 ```javascript
 window.__RUNTIME_CONFIG__ = {
   // ... سایر تنظیمات
-  "VITE_API_PROXY_URL": "https://your-proxy-server.com/api/proxy"
+  "VITE_API_PROXY_URL": "https://app.bankdex.io/api/proxy"
 };
 ```
 

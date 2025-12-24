@@ -22,7 +22,7 @@ module.exports = {
     env_production: {
       NODE_ENV: 'production',
       PORT: 3000,
-      ALLOWED_ORIGINS: 'https://bankdex.io,https://www.bankdex.io'
+      ALLOWED_ORIGINS: 'https://bankdex.io,https://www.bankdex.io,https://app.bankdex.io'
     },
     error_file: './logs/err.log',
     out_file: './logs/out.log',
