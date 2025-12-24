@@ -14,7 +14,7 @@ yarn-error.log*
 # Logs
 logs
 *.log
-
+tmp_rovodev_backup_current/
 # OS files
 .DS_Store
 Thumbs.db
