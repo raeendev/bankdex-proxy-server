@@ -16,15 +16,15 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const server = createServer(app);
 
-// Pre-CORS request log (development-focused)
-app.use((req, res, next) => {
-  const ts = new Date().toISOString();
-  const targetUrl = req.headers['x-target-url'] || req.query.target_url || 'none';
-  if (process.env.NODE_ENV !== 'production') {
-    console.log(`[${ts}] [${req.method}] ${req.path} | Origin: ${req.headers.origin || 'none'} | Target: ${targetUrl}`);
-  }
-  next();
-});
+// Pre-CORS request log (disabled to reduce console noise)
+// app.use((req, res, next) => {
+//   const ts = new Date().toISOString();
+//   const targetUrl = req.headers['x-target-url'] || req.query.target_url || 'none';
+//   if (process.env.NODE_ENV !== 'production') {
+//     console.log(`[${ts}] [${req.method}] ${req.path} | Origin: ${req.headers.origin || 'none'} | Target: ${targetUrl}`);
+//   }
+//   next();
+// });
 
 // CORS
 app.use(
@@ -66,6 +66,7 @@ app.use(
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.text({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(express.raw({ type: 'application/octet-stream', limit: '10mb' }));
 
 // Upstream allowlist (proxy-only egress)
@@ -80,6 +81,8 @@ const ALLOWED_DOMAINS = [
   'auth.privy.io',
   'explorer-api.walletconnect.com',
   'pulse.walletconnect.org',
+  'relay.walletconnect.org',
+  'relay.walletconnect.com',
   'api.web3modal.org',
 ];
 
@@ -163,12 +166,50 @@ app.all('/api/proxy', async (req, res) => {
     const method = (req.headers['x-original-method'] || req.method).toString().toUpperCase();
     const headers = buildForwardHeaders(req.headers);
 
-    // Build body
+    // Build body - handle various body types
     let body = null;
     if (!['GET', 'HEAD'].includes(method)) {
-      body = req.body;
-      if (req.headers['content-type']?.includes('application/json') && typeof req.body !== 'string') {
-        body = JSON.stringify(req.body);
+      // Check if body exists and is not empty
+      // Express may parse empty body as {} (empty object), so we need to check for that
+      const hasBody = req.body !== undefined && req.body !== null;
+      const isEmptyObject = hasBody && typeof req.body === 'object' && Object.keys(req.body).length === 0;
+      
+      if (hasBody && !isEmptyObject) {
+        const contentType = req.headers['content-type'] || '';
+        
+        // Handle JSON body
+        if (contentType.includes('application/json')) {
+          if (typeof req.body === 'string') {
+            body = req.body;
+          } else {
+            body = JSON.stringify(req.body);
+          }
+        }
+        // Handle text/plain body
+        else if (contentType.includes('text/')) {
+          body = typeof req.body === 'string' ? req.body : String(req.body);
+        }
+        // Handle form data (application/x-www-form-urlencoded)
+        else if (contentType.includes('application/x-www-form-urlencoded')) {
+          // Express.urlencoded() already parses this, but we need to send it as string
+          if (typeof req.body === 'string') {
+            body = req.body;
+          } else if (typeof req.body === 'object') {
+            // Convert object to URL-encoded string
+            body = new URLSearchParams(req.body).toString();
+          } else {
+            body = String(req.body);
+          }
+        }
+        // Handle other types (form data, etc.)
+        else {
+          body = req.body;
+        }
+      }
+      // For POST/PUT/PATCH with no body or empty body, set body to undefined (not null)
+      // This allows fetch to handle it correctly
+      else {
+        body = undefined;
       }
     }
 
@@ -217,9 +258,18 @@ app.all('/api/proxy', async (req, res) => {
     const init = {
       method,
       headers,
-      body,
       cache: 'no-store',
     };
+    
+    // Only include body if it's not null/undefined
+    // For GET/HEAD, body should be undefined
+    // For POST/PUT/PATCH with no body, body should be undefined (not null)
+    // Note: fetch() will automatically handle undefined body correctly
+    if (body !== null && body !== undefined) {
+      init.body = body;
+    }
+    // For POST/PUT/PATCH with no body, don't include body property at all
+    // This allows fetch to handle it correctly (some servers accept empty POST, some don't)
 
     let response;
     try {
@@ -301,12 +351,19 @@ app.get('/info', (req, res) => {
 const wss = new WebSocketServer({ noServer: true });
 
 server.on('upgrade', (request, socket, head) => {
-  const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
-  if (pathname === '/api/ws-proxy') {
-    wss.handleUpgrade(request, socket, head, (clientWs, req) => {
-      wss.emit('connection', clientWs, req);
-    });
-  } else {
+  try {
+    const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
+    if (pathname === '/api/ws-proxy') {
+      wss.handleUpgrade(request, socket, head, (clientWs, req) => {
+        wss.emit('connection', clientWs, req);
+      });
+    } else {
+      socket.destroy();
+    }
+  } catch (error) {
+    if (process.env.NODE_ENV === 'development') {
+      console.error('[WebSocket Upgrade] Error:', error?.message, request.url);
+    }
     socket.destroy();
   }
 });
@@ -315,12 +372,34 @@ wss.on('connection', (clientWs, req) => {
   let targetWs = null;
   let isClosing = false;
   try {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const targetUrl = url.searchParams.get('target_url');
+    // Parse URL from request - handle both absolute and relative URLs
+    let url;
+    try {
+      // Try to parse as absolute URL first
+      url = new URL(req.url);
+    } catch {
+      // If that fails, try with host header
+      const host = req.headers.host || 'localhost';
+      const protocol = req.headers['x-forwarded-proto'] || (req.connection?.encrypted ? 'https' : 'http');
+      url = new URL(req.url, `${protocol}://${host}`);
+    }
+    
+    let targetUrl = url.searchParams.get('target_url');
     if (!targetUrl) {
+      if (process.env.NODE_ENV === 'development') {
+        console.error('[WebSocket Proxy] Missing target_url in request:', req.url);
+      }
       clientWs.close(1008, 'Target URL is required. Use ?target_url=wss://...');
       return;
     }
+    
+    // Decode URL if it's encoded
+    try {
+      targetUrl = decodeURIComponent(targetUrl);
+    } catch {
+      // If decoding fails, use original
+    }
+    
     // Strict ws/wss only for WS path
     let parsed;
     try {
@@ -339,18 +418,34 @@ wss.on('connection', (clientWs, req) => {
       return;
     }
 
-    targetWs = new WebSocket(targetUrl);
+    // Create WebSocket connection to target
+    try {
+      targetWs = new WebSocket(targetUrl);
+    } catch (error) {
+      if (process.env.NODE_ENV === 'development') {
+        console.error('[WebSocket Proxy] Failed to create target WebSocket:', error?.message, targetUrl);
+      }
+      if (clientWs.readyState === WebSocket.OPEN || clientWs.readyState === WebSocket.CONNECTING) {
+        clientWs.close(1011, 'Failed to create target WebSocket: ' + (error?.message || 'Unknown error'));
+      }
+      return;
+    }
 
     targetWs.on('open', () => {
-      if (clientWs.readyState !== WebSocket.OPEN) {
+      // Only close target if client is already closed
+      if (clientWs.readyState === WebSocket.CLOSED || clientWs.readyState === WebSocket.CLOSING) {
         if (targetWs.readyState === WebSocket.OPEN) targetWs.close();
       }
     });
 
-    targetWs.on('error', () => {
+    targetWs.on('error', (error) => {
       if (!isClosing && clientWs.readyState === WebSocket.OPEN) {
         isClosing = true;
-        clientWs.close(1011, 'Target connection failed');
+        const errorMsg = error?.message || 'Target connection failed';
+        if (process.env.NODE_ENV === 'development') {
+          console.error('[WebSocket Proxy] Target connection error:', errorMsg, targetUrl);
+        }
+        clientWs.close(1011, errorMsg);
       }
     });
 
@@ -380,16 +475,24 @@ wss.on('connection', (clientWs, req) => {
       }
     });
 
-    clientWs.on('error', () => {
+    clientWs.on('error', (error) => {
       if (!isClosing && targetWs && targetWs.readyState === WebSocket.OPEN) {
         isClosing = true;
+        const errorMsg = error?.message || 'Client connection error';
+        if (process.env.NODE_ENV === 'development') {
+          console.error('[WebSocket Proxy] Client connection error:', errorMsg);
+        }
         targetWs.close();
       }
     });
   } catch (error) {
     if (!isClosing && clientWs.readyState === WebSocket.OPEN) {
       isClosing = true;
-      clientWs.close(1011, 'Proxy server error: ' + error.message);
+      const errorMsg = 'Proxy server error: ' + (error?.message || 'Unknown error');
+      if (process.env.NODE_ENV === 'development') {
+        console.error('[WebSocket Proxy] Error:', errorMsg, error);
+      }
+      clientWs.close(1011, errorMsg);
     }
     if (targetWs && targetWs.readyState === WebSocket.OPEN) {
       targetWs.close();
