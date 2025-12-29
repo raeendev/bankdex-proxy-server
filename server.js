@@ -60,6 +60,9 @@ app.use(
       'privy-client',
       'privy-app-id',
       'privy-ca-id',
+      'x-privy-token',
+      'x-privy-auth-token',
+      'privy-token',
     ],
   })
 );
@@ -116,8 +119,22 @@ function buildForwardHeaders(incoming) {
   pick('privy-client');
   pick('privy-app-id');
   pick('privy-ca-id');
+  // Privy ممکن است headerهای دیگری هم ارسال کند
+  pick('x-privy-token');
+  pick('x-privy-auth-token');
+  pick('privy-token');
+  // Forward all privy-* and x-privy-* headers (case-insensitive)
+  Object.keys(src).forEach((key) => {
+    const lowerKey = key.toLowerCase();
+    if (lowerKey.startsWith('privy-') || lowerKey.startsWith('x-privy-')) {
+      if (!allowed.has(key)) {
+        allowed.set(key, src[key]);
+      }
+    }
+  });
   // Do NOT forward: cookie, origin, referer, sec-*, connection, host, x-*
   // Hop-by-hop headers are stripped implicitly by not including them
+  // Note: x-privy-* and privy-* headers are allowed for Privy authentication
   const out = {};
   allowed.forEach((v, k) => (out[k] = v));
   return out;
