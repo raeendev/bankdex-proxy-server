@@ -63,6 +63,16 @@ app.use(
       'x-privy-token',
       'x-privy-auth-token',
       'privy-token',
+      // Orderly Network headers
+      'orderly-account-id',
+      'orderly-timestamp',
+      'orderly-signature',
+      'orderly-key',
+      // Forward all orderly-* and x-orderly-* headers
+      'x-orderly-account-id',
+      'x-orderly-timestamp',
+      'x-orderly-signature',
+      'x-orderly-key',
     ],
   })
 );
@@ -116,6 +126,7 @@ function buildForwardHeaders(incoming) {
   pick('content-language');
   pick('authorization'); // allowed
   pick('user-agent');
+  pick('origin'); // Forward Origin header (required for some services like WalletConnect)
   pick('privy-client');
   pick('privy-app-id');
   pick('privy-ca-id');
@@ -123,6 +134,11 @@ function buildForwardHeaders(incoming) {
   pick('x-privy-token');
   pick('x-privy-auth-token');
   pick('privy-token');
+  // Orderly Network headers
+  pick('orderly-account-id');
+  pick('orderly-timestamp');
+  pick('orderly-signature');
+  pick('orderly-key');
   // Forward all privy-* and x-privy-* headers (case-insensitive)
   Object.keys(src).forEach((key) => {
     const lowerKey = key.toLowerCase();
@@ -132,9 +148,19 @@ function buildForwardHeaders(incoming) {
       }
     }
   });
-  // Do NOT forward: cookie, origin, referer, sec-*, connection, host, x-*
+  // Forward all orderly-* and x-orderly-* headers (case-insensitive)
+  Object.keys(src).forEach((key) => {
+    const lowerKey = key.toLowerCase();
+    if (lowerKey.startsWith('orderly-') || lowerKey.startsWith('x-orderly-')) {
+      if (!allowed.has(key)) {
+        allowed.set(key, src[key]);
+      }
+    }
+  });
+  // Do NOT forward: cookie, referer, sec-*, connection, host, x-* (except x-privy-*)
   // Hop-by-hop headers are stripped implicitly by not including them
   // Note: x-privy-* and privy-* headers are allowed for Privy authentication
+  // Note: Origin header is now forwarded (required for WalletConnect and similar services)
   const out = {};
   allowed.forEach((v, k) => (out[k] = v));
   return out;
